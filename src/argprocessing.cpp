@@ -34,12 +34,20 @@
 #endif
 
 #include <cassert>
+#include <iostream>
+#include <fstream>
+#include <cstdlib>
+#include <cstdint>
+
 
 using core::Statistic;
 
 namespace {
 
 enum class ColorDiagnostics : int8_t { never, automatic, always };
+// somewhere to store the data
+        std::vector<char> stdin_input;
+        const std::size_t INIT_BUFFER_SIZE = 1024;
 
 // The dependency target in the dependency file is taken from the highest
 // priority source.
@@ -951,8 +959,7 @@ process_option_arg(const Context& ctx,
     state.cpp_args.push_back(args[i]);
     return Statistic::none;
   }
-
-  if (compopt_takes_path(arg)) {
+  if (compopt_takes_arg(arg)){
     if (i == args.size() - 1) {
       LOG("Missing argument to {}", args[i]);
       return Statistic::bad_compiler_arguments;
@@ -960,10 +967,30 @@ process_option_arg(const Context& ctx,
 
     // In the -Xclang -include-(pch/pth) -Xclang <path> case, the path is one
     // index further behind.
+    if (args[i + 1] == "-main-file-name"){
+      LOG("Main file name: {}", args[i+3]);
+    // Rewrite to relative to increase hit rate.
+    args_info.orig_input_file = args[i+3];
+    args_info.input_file = Util::make_relative_path(ctx, args[i+3]);
+    args_info.normalized_input_file =
+      Util::normalize_concrete_absolute_path(args_info.input_file);
+    return Statistic::none;
+    }
+  }
+
+  if (compopt_takes_path(arg)) {
+    if (i == args.size() - 1) {
+      LOG("Missing argument to {}", args[i]);
+      return Statistic::bad_compiler_arguments;
+    }
+   // In the -Xclang -include-(pch/pth) -Xclang <path> case, the path is one
+    // index further behind.
     const size_t next = args[i + 1] == "-Xclang" && i + 2 < args.size() ? 2 : 1;
 
+    
     if (!detect_pch(
           arg, args[i + next], args_info.included_pch_file, next == 2, state)) {
+          
       return Statistic::bad_compiler_arguments;
     }
 
@@ -981,7 +1008,7 @@ process_option_arg(const Context& ctx,
 
     i += next;
     return Statistic::none;
-  }
+    }
 
   // Detect PCH for options with concatenated path (relative or absolute).
   if (util::starts_with(arg, "-include") || util::starts_with(arg, "-Fp")
@@ -996,6 +1023,44 @@ process_option_arg(const Context& ctx,
     }
 
     // Fall through to the next section, so intentionally not returning here.
+  }
+
+  if (arg == "-") {
+    try
+    {
+        // on some systems you may need to reopen stdin in binary mode
+        // this is supposed to be reasonably portable
+        std::freopen(nullptr, "rb", stdin);
+
+        if(std::ferror(stdin))
+            throw std::runtime_error(std::strerror(errno));
+
+        std::size_t len;
+        std::array<char, INIT_BUFFER_SIZE> buf;
+
+        
+
+        // use std::fread and remember to only use as many bytes as are returned
+        // according to len
+        while((len = std::fread(buf.data(), sizeof(buf[0]), buf.size(), stdin)) > 0)
+        {
+            // whoopsie
+            if(std::ferror(stdin) && !std::feof(stdin))
+                throw std::runtime_error(std::strerror(errno));
+
+            // use {buf.data(), buf.data() + len} here
+            stdin_input.insert(stdin_input.end(), buf.data(), buf.data() + len); // append to vector
+        }
+        LOG("Collected stdin {}", stdin_input.size());
+       
+
+        // use input vector here
+    }
+    catch(std::exception const& e)
+    {
+        std::cerr << e.what() << '\n';
+    }
+    return Statistic::none;
   }
 
   // Potentially rewrite concatenated absolute path argument to relative.
@@ -1057,6 +1122,8 @@ process_option_arg(const Context& ctx,
     }
   }
 
+  // Other options.
+  
   // It was not a known option.
   return std::nullopt;
 }
@@ -1149,7 +1216,17 @@ process_args(Context& ctx)
       argument_error = error;
     }
   }
+  if (stdin_input.size()){
+    
+    int returncode = system((std::string("mkdir -p $(dirname ") + args_info.input_file + std::string(")")).c_str());
+   std::ofstream myFile (args_info.input_file.c_str(), std::ios::out | std::ios::binary);
 
+    
+          myFile.write((char*) stdin_input.data(), stdin_input.size());
+        
+        myFile.close();
+    LOG("Wrote bin file {}", returncode);
+  }
   // Bail out on too hard combinations of options.
   if (state.found_mf_opt && state.found_wp_md_or_mmd_opt) {
     // GCC and Clang behave differently when "-Wp,-M[M]D,wp.d" and "-MF mf.d"
@@ -1216,8 +1293,8 @@ process_args(Context& ctx)
 #endif
 
   if (args_info.input_file.empty()) {
-    LOG_RAW("No input file found");
-    return Statistic::no_input_file;
+    
+    
   }
 
   if (state.found_pch || state.found_fpch_preprocess) {

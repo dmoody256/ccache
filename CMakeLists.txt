@@ -126,6 +126,12 @@ if(REDIS_STORAGE_BACKEND)
   find_package(hiredis 0.13.3 MODULE REQUIRED)
 endif()
 
+find_package(libmongocxx REQUIRED)
+find_package(libbsoncxx REQUIRED)
+find_package(aws-c-s3 REQUIRED)
+find_package(aws-cpp-sdk-core REQUIRED)
+find_package(AWSSDK COMPONENTS core)
+find_package(AWSSDK REQUIRED COMPONENTS s3)
 #
 # Special flags
 #
